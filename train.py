@@ -1,6 +1,7 @@
 import os
 import math
 import torch
+import torch.nn as nn
 from torch.optim import Adam
 
 def train(model, train_loader, num_epochs=1, lr=1e-4):

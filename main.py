@@ -17,7 +17,7 @@ from torch.utils.data import DataLoader, Dataset
 import torch.nn.functional as F
 from functools import partial
 import gc
-# import av
+import av
 import joblib
 
 from data_loader import *
@@ -44,7 +44,8 @@ train_loader = DataLoader(train_data, 32, shuffle=True, collate_fn=custom_collat
 # Model, optimizer setup
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 sim_mae_vit_tiny_path8 = sim_mae_vit_tiny_patch8_dec512d8b
-model = sim_mae_vit_tiny_path8().to(device)
+model= nn.DataParallel(sim_mae_vit_tiny_path8())
+model = model.to(device)
 
 num_epochs = 10
 model = train(model, train_loader, num_epochs=num_epochs, lr=1e-4)
