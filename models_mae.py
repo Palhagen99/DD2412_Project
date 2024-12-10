@@ -120,6 +120,7 @@ class DecoderBlock(nn.Module):
             act_layer=act_layer,
             drop=proj_drop,
         )
+        self.norm3 = norm_layer(dim)
         
     # We need custom attention in blocks
     # Cross attention for decoder
