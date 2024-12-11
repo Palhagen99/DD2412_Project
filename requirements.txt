@@ -13,7 +13,4 @@ argparse  # For argument parsing, included in standard library
 urllib3  # For advanced HTTP interactions (optional if urllib suffices)
 utils  # For custom utilities (ensure `utils` is in the working directory)
 vision-transformer  # If external, include installation instructions
-data-loader  # Placeholder for your `data_loader` script; ensure local or PyPI available
-pos-embed  # Placeholder for `pos_embed`; ensure it is available locally or as a package
-models-mae  # Placeholder for `models_mae`; ensure locally or on PyPI
-train  # Placeholder for `train` script; ensure availability locally
+
