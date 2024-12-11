@@ -1,0 +1,19 @@
+torch>=1.9.0  # PyTorch, adjust version based on your setup
+torchvision>=0.10.0  # TorchVision, should match PyTorch version
+opencv-python  # OpenCV for cv2
+numpy  # NumPy for array manipulation
+matplotlib  # For plotting with matplotlib.pyplot
+tqdm  # For progress bars
+pillow  # For working with images (PIL.Image)
+timm  # For vision transformer and related layers
+av  # For video processing with PyAV
+joblib  # For saving and loading data
+argparse  # For argument parsing, included in standard library
+gc  # Garbage collection, included in standard library
+urllib3  # For advanced HTTP interactions (optional if urllib suffices)
+utils  # For custom utilities (ensure `utils` is in the working directory)
+vision-transformer  # If external, include installation instructions
+data-loader  # Placeholder for your `data_loader` script; ensure local or PyPI available
+pos-embed  # Placeholder for `pos_embed`; ensure it is available locally or as a package
+models-mae  # Placeholder for `models_mae`; ensure locally or on PyPI
+train  # Placeholder for `train` script; ensure availability locally
