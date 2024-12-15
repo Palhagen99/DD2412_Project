@@ -12,51 +12,52 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-Some parts are taken from https://github.com/Liusifei/UVC
+Heavily inspired by https://github.com/facebookresearch/dino/blob/main/eval_video_segmentation.py
 """
 
 import numpy as np
+import torch
+import torch.nn.functional as F
 from PIL import Image
 import cv2
 from glob import glob
 import os
-import torch
-import torch.nn.functional as F
 from queue import Queue
 from tqdm import tqdm
 from urllib.request import urlopen
 
 @torch.no_grad()
-def eval_davis(model, video_name, videos_path, labels_path, queue_length, topk, size_neighbourhood, model_name, output_dir, patch_size=8):
+def eval_video(model, model_name, video_name, videos_path, labels_path, queue_length, topk, size_neighbourhood, output_dir, patch_size=8):
     color_palette = np.loadtxt(urlopen("https://raw.githubusercontent.com/Liusifei/UVC/master/libs/data/palette.txt"), dtype=np.uint8).reshape(-1, 3)
-    frames = read_list_frames(os.path.join(videos_path, video_name))
-    labels = read_list_labels(os.path.join(labels_path, video_name))
+
+    frames = get_frames(os.path.join(videos_path, video_name))
+    labels = get_labels(os.path.join(labels_path, video_name))
     
-    first_frame, ori_h, ori_w = read_frame(frames[0])
-    first_label, _ = read_label(labels[0])
-    first_feat, _, _ = encode_frame(model, first_frame)
+    frame1, ori_h, ori_w = get_frame(frames[0])
+    label1, _ = get_label(labels[0])
+    frame1_feat, _, _ = extract_feature(model, frame1)
 
     queue = Queue(maxsize=queue_length)
     video_output = os.path.join(output_dir, model_name, video_name)
     os.makedirs(video_output, exist_ok=True)
 
     for frame_path in tqdm(frames[1:], desc="Processing frames"):
-        past_feats = [first_feat] + [item[0] for item in queue.queue]
-        past_labels = [first_label] + [item[1] for item in queue.queue]
+        past_feats = [frame1_feat] + [item[0] for item in queue.queue]
+        past_labels = [label1] + [item[1] for item in queue.queue]
 
-        target_frame = read_frame(frame_path)[0]
-        frame_seg, frame_feat = label_propagation(model, past_feats, past_labels, target_frame, topk, size_neighbourhood)
+        frame_tar = get_frame(frame_path)[0]
+        frame_tar_seg, frame_feat = label_propagation(model, past_feats, past_labels, frame_tar, topk, size_neighbourhood)
 
         if queue.full():
             queue.get()
-        queue.put((frame_feat, frame_seg))
+        queue.put((frame_feat, frame_tar_seg))
 
-        frame_seg = F.interpolate(frame_seg, scale_factor=patch_size, mode='bilinear', align_corners=False)[0]
-        frame_seg = torch.argmax(norm_mask(frame_seg), dim=0).cpu().numpy().astype(np.uint8)
-        frame_seg = np.array(Image.fromarray(frame_seg).resize((ori_w, ori_h), Image.NEAREST))
+        frame_tar_seg = F.interpolate(frame_tar_seg, scale_factor=patch_size, mode='bilinear', align_corners=False)[0]
+        frame_tar_seg = torch.argmax(norm_mask(frame_tar_seg), dim=0).cpu().numpy().astype(np.uint8)
+        frame_tar_seg = np.array(Image.fromarray(frame_tar_seg).resize((ori_w, ori_h), Image.NEAREST))
 
         output_path = os.path.join(video_output, os.path.basename(frame_path).replace(".jpg", ".png"))
-        save_frame_image(output_path, frame_seg, color_palette)
+        save_frame_image(output_path, frame_tar_seg, color_palette)
 
 def label_propagation(model, list_past_features, past_labels, frame_tar, topk, size_neighborhood=0):
   feat_tar, h, w = encode_frame(model, frame_tar)
@@ -88,7 +89,7 @@ def label_propagation(model, list_past_features, past_labels, frame_tar, topk, s
 
   return tseg, feat_tar
 
-def read_frame(frame_path, patch_size=8, ori_shape=False):
+def get_frame(frame_path, patch_size=8, ori_shape=False):
     frame = cv2.imread(frame_path)
     h, w, _ = frame.shape
     new_w, new_h = (int(w // patch_size) * patch_size, h) if ori_shape else (224, 224)
@@ -96,7 +97,7 @@ def read_frame(frame_path, patch_size=8, ori_shape=False):
     frame = torch.tensor(np.transpose(frame, (2, 0, 1)), dtype=torch.float32)
     return frame, h, w
 
-def read_label(label_path, patch_size=8, ori_shape=False):
+def get_label(label_path, patch_size=8, ori_shape=False):
   labels = Image.open(label_path)
   w, h = labels.size
   new_w, new_h = (int(w // patch_size) * patch_size, h) if ori_shape else (224, 224)
@@ -110,10 +111,10 @@ def read_label(label_path, patch_size=8, ori_shape=False):
   one_hot = one_hot.view(h, w, n_dims)
   return one_hot.permute(2,0,1).unsqueeze(0), np.asarray(labels) 
 
-def read_list_frames(video_path):
+def get_frames(video_path):
   return sorted([file for file in glob(os.path.join(video_path, '*.jpg'))])
 
-def read_list_labels(labels_path):
+def get_labels(labels_path):
   return sorted([file for file in glob(os.path.join(labels_path, '*.png'))])
 
 def norm_mask(mask):
@@ -126,7 +127,7 @@ def compute_mask(h, w, size_neighborhood):
     mask = (indices.unsqueeze(-1) - indices.view(-1))**2 < (size_neighborhood**2)
     return mask.float().cuda(non_blocking=True).reshape(h * w, h * w)
 
-def encode_frame(model, frame, patch_size=8):
+def extract_feature(model, frame, patch_size=8):
     frame = frame.unsqueeze(0).cuda()
     h, w = frame.shape[2] // patch_size, frame.shape[3] // patch_size
     out = model.forward_encoder(frame, 0)[:, 1:, :].squeeze().cuda()
