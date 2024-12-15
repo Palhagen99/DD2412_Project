@@ -60,7 +60,7 @@ def eval_video(model, model_name, video_name, videos_path, labels_path, queue_le
         save_frame_image(output_path, frame_tar_seg, color_palette)
 
 def label_propagation(model, list_past_features, past_labels, frame_tar, topk, size_neighborhood=0):
-  feat_tar, h, w = encode_frame(model, frame_tar)
+  feat_tar, h, w = extract_feature(model, frame_tar)
   ncontext = len(list_past_features)
 
   feats_tar = feat_tar.cuda().unsqueeze(0).repeat(ncontext, 1, 1)
