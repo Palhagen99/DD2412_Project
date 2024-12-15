@@ -109,7 +109,7 @@ def get_label(label_path, patch_size=8, ori_shape=False):
   flattened_labels = resized_labels.type(torch.LongTensor).view(-1,1)
   one_hot = torch.zeros((flattened_labels.shape[0], n_dims)).scatter(1, flattened_labels, 1)
   one_hot = one_hot.view(h, w, n_dims)
-  return one_hot.permute(2,0,1).unsqueeze(0), np.asarray(labels) 
+  return one_hot.permute(2,0,1).unsqueeze(0), np.asarray(labels)
 
 def get_frames(video_path):
   return sorted([file for file in glob(os.path.join(video_path, '*.jpg'))])
@@ -117,15 +117,52 @@ def get_frames(video_path):
 def get_labels(labels_path):
   return sorted([file for file in glob(os.path.join(labels_path, '*.png'))])
 
-def norm_mask(mask):
+""" def norm_mask(mask):
     mask -= mask.min(dim=(0), keepdim=True)[0]
     mask /= mask.max(dim=(0), keepdim=True)[0].clamp(min=1e-6)
+    return mask """
+
+def norm_mask(mask):
+    c, _, _ = mask.size()
+    for cnt in range(c):
+        mask_cnt = mask[cnt,:,:]
+        if(mask_cnt.max() > 0):
+            mask_cnt = (mask_cnt - mask_cnt.min())
+            mask_cnt = mask_cnt/mask_cnt.max()
+            mask[cnt,:,:] = mask_cnt
     return mask
 
-def compute_mask(h, w, size_neighborhood):
+""" def compute_mask(h, w, size_neighborhood):
     indices = torch.arange(h * w).view(h, w)
     mask = (indices.unsqueeze(-1) - indices.view(-1))**2 < (size_neighborhood**2)
-    return mask.float().cuda(non_blocking=True).reshape(h * w, h * w)
+    return mask.float().cuda(non_blocking=True).reshape(h * w, h * w) """
+
+def compute_mask(h, w, size_neighborhood):
+    indices = torch.arange(h * w, dtype=torch.long).reshape(h, w)
+
+    offsets = torch.arange(-size_neighborhood, size_neighborhood + 1, dtype=torch.long)
+    dy, dx = torch.meshgrid(offsets, offsets, indexing="ij")
+    dy, dx = dy.flatten(), dx.flatten()
+
+    row_indices = []
+    col_indices = []
+    for y in range(h):
+        for x in range(w):
+            ny, nx = y + dy, x + dx
+            valid = (ny >= 0) & (ny < h) & (nx >= 0) & (nx < w)
+            ny, nx = ny[valid], nx[valid]
+            row_indices.append(indices[y, x].repeat(len(ny)))
+            col_indices.append(indices[ny, nx])
+
+    row_indices = torch.cat(row_indices)
+    col_indices = torch.cat(col_indices)
+
+    mask = torch.sparse.FloatTensor(
+        torch.stack([row_indices, col_indices]),
+        torch.ones(len(row_indices)),
+        size=(h * w, h * w)
+    )
+    return mask.to_dense().cuda(non_blocking=True)
 
 def extract_feature(model, frame, patch_size=8):
     frame = frame.unsqueeze(0).cuda()
