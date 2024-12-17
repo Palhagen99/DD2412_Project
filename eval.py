@@ -167,7 +167,7 @@ def compute_mask(h, w, size_neighborhood):
 def extract_feature(model, frame, patch_size=8):
     frame = frame.unsqueeze(0).cuda()
     h, w = frame.shape[2] // patch_size, frame.shape[3] // patch_size
-    out = model.forward_encoder(frame, 0)[:, 1:, :].squeeze().cuda()
+    out = model.forward_encoder(frame, 0)[0][:, 1:, :].squeeze().cuda()
     return out, h, w
 
 def save_frame_image(filename, array, color_palette):

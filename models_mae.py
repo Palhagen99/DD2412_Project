@@ -166,10 +166,9 @@ class SiameseMaskedAutoencoderViT(nn.Module):
     def __init__(self, img_size=224, patch_size=16, in_chans=3,
                  embed_dim=1024, depth=24, num_heads=16,
                  decoder_embed_dim=512, decoder_depth=8, decoder_num_heads=16,
-                 mlp_ratio=4., norm_layer=nn.LayerNorm, norm_pix_loss=False):
+                 mlp_ratio=4., norm_layer=nn.LayerNorm, norm_pix_loss=False, mask_ratio=0.95, use_joint_enc=False, use_joint_dec=False):
         super().__init__()
 
-        # --------------------------------------------------------------------------
         # MAE encoder specifics
         self.patch_embed = PatchEmbed(img_size, patch_size, in_chans, embed_dim)
         num_patches = self.patch_embed.num_patches
@@ -181,9 +180,7 @@ class SiameseMaskedAutoencoderViT(nn.Module):
             EncoderBlock(embed_dim, num_heads, mlp_ratio, qkv_bias=True, norm_layer=norm_layer)
             for i in range(depth)])
         self.norm = norm_layer(embed_dim)
-        # --------------------------------------------------------------------------
 
-        # --------------------------------------------------------------------------
         # MAE decoder specifics
         self.decoder_embed = nn.Linear(embed_dim, decoder_embed_dim, bias=True)
 
@@ -197,9 +194,12 @@ class SiameseMaskedAutoencoderViT(nn.Module):
 
         self.decoder_norm = norm_layer(decoder_embed_dim)
         self.decoder_pred = nn.Linear(decoder_embed_dim, patch_size**2 * in_chans, bias=True) # decoder to patch
-        # --------------------------------------------------------------------------
 
         self.norm_pix_loss = norm_pix_loss
+        
+        self.mask_ratio = mask_ratio
+        self.use_joint_enc = use_joint_enc
+        self.use_joint_dec = use_joint_dec
 
         self.initialize_weights()
 
@@ -261,7 +261,7 @@ class SiameseMaskedAutoencoderViT(nn.Module):
         imgs = x.reshape(shape=(x.shape[0], 3, h * p, h * p))
         return imgs
 
-    def random_masking(self, x, mask_ratio, use_joint_enc=False):
+    def random_masking(self, x, mask_ratio):
         """
         Perform per-sample random masking by per-sample shuffling.
         Per-sample shuffling is done by argsort random noise.
@@ -287,24 +287,21 @@ class SiameseMaskedAutoencoderViT(nn.Module):
         # unshuffle to get the binary mask
         mask = torch.gather(mask, dim=1, index=ids_restore)
         
-        # -----------------------------------------------------------------
-        if use_joint_enc:
+        if self.use_joint_enc:
             bmask = torch.zeros_like(mask, dtype=torch.bool)
             x_masked = x.clone()
             x_masked[~bmask] = 0 
-        # -----------------------------------------------------------------
 
         return x_masked, mask, ids_restore
 
-    def forward_encoder(self, x, mask_ratio, use_joint_enc=False, use_joint_dec=False):
+    def forward_encoder(self, x, mask_ratio):
         # embed patches
         x = self.patch_embed(x)
-
+        # print(f"Embed patch: {x.shape}")
         # add pos embed w/o cls token
         x = x + self.pos_embed[:, 1:, :]
-        # -----------------------------------------------------------------
-        if mask_ratio>0 or use_joint_enc or use_joint_dec:
-            if use_joint_enc:
+        if self.mask_ratio>0 or self.use_joint_enc or self.use_joint_dec:
+            if self.use_joint_enc:
                 x1_idx = int(x.shape[0] / 2)
                 x2_idx = x.shape[0]
                 x1, mask1, ids_restore1 = self.random_masking(x[:x1_idx], mask_ratio=0)
@@ -315,29 +312,28 @@ class SiameseMaskedAutoencoderViT(nn.Module):
             else: 
                 # masking: length -> length * mask_ratio
                 x, mask, ids_restore = self.random_masking(x, mask_ratio)
-        # -----------------------------------------------------------------
         # append cls token
         cls_token = self.cls_token + self.pos_embed[:, :1, :]
         cls_tokens = cls_token.expand(x.shape[0], -1, -1)
         x = torch.cat((cls_tokens, x), dim=1)
 
+        # print(f"Appended CLS token: {x.shape}")
         # apply Transformer blocks
         for blk in self.blocks:
             x = blk(x)
         x = self.norm(x)
+        # print(f"Forwarded through blocks: {x.shape}")
        
-        # -----------------------------------------------------------------
-        if mask_ratio>0 or use_joint_enc or use_joint_dec:
+        if self.mask_ratio>0 or self.use_joint_enc or self.use_joint_dec:
             return x, mask, ids_restore
         else:
            return x
-        # -----------------------------------------------------------------
+  
 
 
-     # ----------------------------------------------------------------- 
-    def forward_decoder(self, f1, f2, ids_restore_2, use_joint_enc=False):
 
-        x_1 = self.decoder_embed(f1)
+    def forward_decoder(self, f1, f2, ids_restore_2):  
+        x_1 = self.decoder_embed(f1[0])
         x_1 = x_1 + self.decoder_pos_embed
 
         x_2 = self.decoder_embed(f2)
@@ -348,7 +344,7 @@ class SiameseMaskedAutoencoderViT(nn.Module):
 
         x_2 = x_2 + self.decoder_pos_embed
 
-        if use_joint_enc:
+        if self.use_joint_enc:
           x_1 = torch.vstack([x_1, x_2])
 
         for blk in self.decoder_blocks:
@@ -359,26 +355,22 @@ class SiameseMaskedAutoencoderViT(nn.Module):
         x = x[:, 1:, :]
 
         return x
-    # -----------------------------------------------------------------
 
 
 
-    def forward_loss(self, imgs, pred, mask, use_joint_dec=False):
+
+    def forward_loss(self, imgs, pred, mask):
         """
         imgs: [N, 3, H, W]
         pred: [N, L, p*p*3]
         mask: [N, L], 0 is keep, 1 is remove, 
         """
         
-        # -----------------------------------------------------------------
-        if use_joint_dec:
+        if self.use_joint_dec:
           target = self.patchify(imgs[:, :, :, :])
         else:
           target = self.patchify(imgs[:, 1, :, :, :])
-        # -----------------------------------------------------------------
 
-        
-        
         if self.norm_pix_loss:
             mean = target.mean(dim=-1, keepdim=True)
             var = target.var(dim=-1, keepdim=True)
@@ -390,8 +382,9 @@ class SiameseMaskedAutoencoderViT(nn.Module):
         loss = (loss * mask).sum() / mask.sum()  # mean loss on removed patches
         return loss
 
-    def forward(self, imgs, mask_ratio=0.95, use_joint_enc=False, use_joint_dec=False):
-        if use_joint_enc:
+    def forward(self, imgs):
+        mask_ratio = self.mask_ratio
+        if self.use_joint_enc:
           imgs_joint = torch.vstack([imgs[:, 0], imgs[:, 1]])
           latent, mask, ids_restore = self.forward_encoder(imgs_joint.float(), mask_ratio=mask_ratio)
           l1_idx = int(latent.shape[0] / 2)
@@ -401,14 +394,14 @@ class SiameseMaskedAutoencoderViT(nn.Module):
           ids_restore_2 = ids_restore[l1_idx:l2_idx]
           mask_1 = mask[:l1_idx]
           mask_2 = mask[l1_idx:l2_idx]
-        elif use_joint_dec:
+        elif self.use_joint_dec:
           latent_1, mask_1, _ = self.forward_encoder(imgs[:, 0].float(), mask_ratio=0)
           latent_2, mask_2, ids_restore_2 = self.forward_encoder(imgs[:, 1].float(), mask_ratio=mask_ratio)
         else:
           latent_1 = self.forward_encoder(imgs[:, 0].float(), mask_ratio=0)
           latent_2, mask_2, ids_restore_2 = self.forward_encoder(imgs[:, 1].float(), mask_ratio=mask_ratio)
 
-        if use_joint_dec:
+        if self.use_joint_dec:
           imgs = torch.vstack([imgs[:, 0], imgs[:, 1]])
           mask_2 = torch.vstack([mask_1, mask_2])
         pred = self.forward_decoder(latent_1, latent_2, ids_restore_2)
@@ -416,37 +409,10 @@ class SiameseMaskedAutoencoderViT(nn.Module):
         return loss, pred
 
 
-# Different model definitons
-def sim_mae_vit_small_patch16_dec512d8b(**kwargs):
-    model = SiameseMaskedAutoencoderViT(
-        patch_size=16, embed_dim=384, depth=12, num_heads=6,
-        decoder_embed_dim=512, decoder_depth=8, decoder_num_heads=16,
-        mlp_ratio=4, norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
-    return model
 
-
-def sim_mae_vit_small_patch8_dec512d8b(**kwargs):
-    model = SiameseMaskedAutoencoderViT(
-        patch_size=8, embed_dim=384, depth=12, num_heads=6,
-        decoder_embed_dim=512, decoder_depth=8, decoder_num_heads=16,
-        mlp_ratio=4, norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
-    return model
-
-def sim_mae_vit_tiny_patch16_dec512d8b(**kwargs):
-    model = SiameseMaskedAutoencoderViT(
-        patch_size=16, embed_dim=192, depth=12, num_heads=3,
-        decoder_embed_dim=512, decoder_depth=8, decoder_num_heads=16,
-        mlp_ratio=4, norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
-    return model
-
-def sim_mae_vit_tiny_patch8_dec512d8b(**kwargs):
+def sim_mae_vit_tiny_patch8_dec512d8b(mask_ratio=0.95, use_joint_enc=False, use_joint_dec=False, **kwargs):
     model = SiameseMaskedAutoencoderViT(
         patch_size=8, embed_dim=192, depth=12, num_heads=3,
         decoder_embed_dim=512, decoder_depth=8, decoder_num_heads=16,
-        mlp_ratio=4, norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
+        mlp_ratio=4, norm_layer=partial(nn.LayerNorm, eps=1e-6), mask_ratio=mask_ratio, use_joint_enc=use_joint_enc, use_joint_dec=use_joint_dec, **kwargs)
     return model
-
-
-
-# set recommended archs
-# mae_vit_base_patch16 = mae_vit_base_patch16_dec512d8b  # decoder: 512 dim, 8 blocks
